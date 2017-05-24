@@ -327,7 +327,8 @@ int main(int argc, char **argv)
 			displ2[i] = displ2[i-1] + array_size2[i-1];
 	}
 	
-	MPI_Gatherv(A, array_size, MPI_DOUBLE, array, array_size2, displ2, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	MPI_Gatherv(A, array_size, MPI_DOUBLE, array, array_size2, displ2, \
+					MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
 /*	if (rank == 0)
 		printArray(array, length, rank);
@@ -339,7 +340,8 @@ int main(int argc, char **argv)
 	{
 
 		int sorted = verify_sort(array, length);
-		printf("Time to sort an array of length %d is: %lf \n", length, end_time-begin_time);
+		printf("Time to sort an array of length %d is: %lf \n", \
+					length, end_time-begin_time);
 		free(array);
 	}
 MPI_Finalize();
