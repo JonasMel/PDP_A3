@@ -11,9 +11,8 @@
 double MedOfThree(double *A, int left, int right);
 void seqQsort(double *A, int length);
 void printArray(double *A, int length, int rank);
-void swap(double *A, double *B);
 int verify_sort(double *A, int length);
-
+int random_pivot(double *A, int length);
 
 int main(int argc, char **argv)
 {
@@ -22,6 +21,14 @@ int main(int argc, char **argv)
 	double *A_glob, *A, *buff, piv, begin_time, end_time;
 	int *send_count, *displs;
 	p = atoi(argv[1]);
+	if (p != 1)
+	{
+		if (p % 2 != 0)
+		{
+			printf("Number of processes must be a power of 2");
+			return -1;
+		}
+	}
 	length = atoi(argv[2]);
 	MPI_Request send_req;
 	MPI_Status status;
@@ -88,26 +95,26 @@ int main(int argc, char **argv)
 	/*Picking first common median and broadcasting it and freeing initial root array */
 	if (rank == 0)
 	{
+		free(send_count);
+		free(displs);
 		free(A_glob);
 		piv = MedOfThree(A, 0, array_size-1);
 	}
-	
 	MPI_Bcast(&piv, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	#if debug
 		printf("My rank is = %d pivot is = %lf \n", rank, piv);
 	#endif	
 	
+	/*Initializing variables needed in distribution and merging loop*/
 	int index, send_size, recv_size, start, end, new_size, j, k, l, cntr;
-	double *tmp_array, piv_tmp;
+	double *tmp_array;
 	cntr = 0;
-	/* Looping to send and merge sorted arrays */
 	
+	/* Looping to send and merge sorted arrays */
 	for ( pal = group_size/2; pal > 0; pal = pal >> 1)
 	{
-		cntr++;
-/*		if (rank == 0)
-			printf("******I T E R A T I O N = %d ****** \n", cntr);*/	
-		/* Checking at what index elements in array become larger than pivot */
+
+		/*Checking what index values in sorted array are larger than pivot*/
 		index = 0;
 		for (i = 0; i < array_size; ++i)
 		{
@@ -120,19 +127,23 @@ int main(int argc, char **argv)
 		printf("iteration = %d, rank/pal mod 2 =  %d, rank = %d, pal  = %d \n", cntr,((rank/pal) % 2), \
 					rank, pal);
 		#endif
+		
+		/*If on the lower (left) of two partners send elements larger than
+		* pivot to the higher (right) else send elements smaller than pivot
+		* to the left */
 		if ((rank/pal) % 2 == 0)
 		{
 			send_size = 0;
 			send_size = array_size - index;
 
-//						printf("My rank is = %d send_size = %d \n", rank, send_size);
+
 				MPI_Send(&A[index], send_size, MPI_DOUBLE, rank + pal, rank, \
 							MPI_COMM_WORLD);
 
 			recv_size = 0;
 			MPI_Probe(rank + pal, rank + pal, MPI_COMM_WORLD, &status);
 			MPI_Get_count(&status, MPI_DOUBLE, &recv_size);
-//				printf("My rank is = %d recv_size = %d \n", rank, recv_size);
+
 				free(buff);
 				buff = (double*)malloc(recv_size*sizeof(double));
 				MPI_Recv(buff, recv_size, MPI_DOUBLE, rank+pal, rank+pal, \
@@ -154,14 +165,14 @@ int main(int argc, char **argv)
 			MPI_Probe(rank - pal, rank - pal, MPI_COMM_WORLD, &status);
 			MPI_Get_count(&status, MPI_DOUBLE, &recv_size);
 
-//				printf("My rank is = %d recv_size = %d \n", rank, recv_size);
+
 				free(buff);
 				buff = (double*)malloc(recv_size*sizeof(double));
 				MPI_Recv(buff, recv_size, MPI_DOUBLE, rank-pal, rank-pal, \
 							MPI_COMM_WORLD, &status);
 
 
-//				printf("My rank is = %d send_size = %d \n", rank, send_size);
+
 				MPI_Send(&A[0], send_size, MPI_DOUBLE, rank - pal, rank, \
 							MPI_COMM_WORLD);							
 
@@ -172,7 +183,8 @@ int main(int argc, char **argv)
 		}
 		
 		
-//		printf("******MERGING****** \n");
+		/*if on the left keep smaller elements and merge whats kept
+		* with recieved. Else keep large and to the same.*/
 		if ((rank / pal) % 2 == 0)
 		{
 			start = 0;
@@ -277,14 +289,11 @@ int main(int argc, char **argv)
 			tmp_array = NULL;
 			array_size = new_size;
 		}
-		
-		
-//		printf("******DONE MERGING****** \n");	
-
+		/*If evenly divisible by pal send pivot until rank + partner-1
+		* is reached. Else recieve pivot.*/
 		if ((rank % pal) == 0)
 		{
-				
-//			printf("******RANK = %d IS CHOOSING NEW PIVOT FOR****** \n", rank);	
+				//piv = random_pivot(A, array_size);
 				piv = MedOfThree(A, 0, array_size-1);
 			for (ii = 1; ii < pal; ii++)
 			{
@@ -302,13 +311,14 @@ int main(int argc, char **argv)
 			
 
 		}
-//		printf("******DONE CHOOSING PIVOT****** \n");	
+	
 		#if print
 			printArray(A, array_size, rank);
 		#endif
 
 	}
 	
+	/*Allocate memory for new full array and displacements and size vectors*/
 	int *displ2, *array_size2;
 	double *array;
 	if (rank == 0)
@@ -317,36 +327,46 @@ int main(int argc, char **argv)
 		array_size2 = (int*)malloc(group_size*sizeof(int));
 		array = (double*)malloc(length*sizeof(double));
 	}
+	
+	/*Gather final indiviual array sizes*/
 	MPI_Gather(&array_size, 1, MPI_INT, array_size2, 1, MPI_INT, 0, MPI_COMM_WORLD);
-//	printArray(A, array_size, rank);
+	
+	/*Fixing displacements*/
 	if (rank == 0)
 	{
-//		printf("*********GATHERING*********\n");
 		displ2[0] = 0;
 		for (i = 1; i < group_size; ++i)
 			displ2[i] = displ2[i-1] + array_size2[i-1];
 	}
 	
+	/*Gathering data from individual processes into full sorted array.*/
 	MPI_Gatherv(A, array_size, MPI_DOUBLE, array, array_size2, displ2, \
 					MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-/*	if (rank == 0)
-		printArray(array, length, rank);
-*/
 	free(A);
 	free(buff);
 	end_time = MPI_Wtime();
 	if (rank  == 0)
 	{
-
+		/*Checking if sorted*/
 		int sorted = verify_sort(array, length);
 		printf("Time to sort an array of length %d is: %lf \n", \
 					length, end_time-begin_time);
 		free(array);
+		free(displ2);
+		free(array_size2);
 	}
 MPI_Finalize();
 
 	
+}
+
+int random_pivot(double *A, int length)
+{
+	if(length != 0)
+		return A[(int)((rand()/((float)RAND_MAX+1))*length)];
+	else
+		return 0;
 }
 
 double MedOfThree(double *A, int left, int right)
@@ -380,6 +400,7 @@ void seqQsort(double *A, int length)
 	
 	int i,j;
 	double tmp, pivot;
+	
 	pivot = (A[(int)((rand()/((float)RAND_MAX+1))*length)] \
 				+ A[(int)((rand()/((float)RAND_MAX+1))*length)])*0.5;
 	for (i = 0, j = length-1; ; i++, j--)
@@ -412,12 +433,6 @@ void printArray(double *A, int length, int rank)
 	printf("\n");
 }
 
-void swap(double *A, double *B)
-{
-  double temp = *A;
-  *A = *B;
-  *B = temp;
-}
 
 int verify_sort(double *A, int length)
 {
